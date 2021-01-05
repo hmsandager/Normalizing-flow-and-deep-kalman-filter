@@ -29,19 +29,19 @@ class Emitter(nn.Module):
         super().__init__()
         kernel_size = 4
         padding = int((kernel_size - 1) / 2)
-        n_layers = 2
+        layers = 2
         stride = 2
-        self.feature_to_cnn_dim = min(width, height) // 2 ** n_layers
-        self.feature_to_cnn_shape = (emission_channels[0], self.feature_to_cnn_dim, self.feature_to_cnn_dim)
+        self.cnn_dim = min(width, height) // 2 ** layers
+        self.cnn_shape = (emission_channels[0], self.cnn_dim, self.cnn_dim)
 
         # Return to original dimension using ConvCNNs
         self.lin_z_to_hidden = nn.Linear(
-            z_dim, np.prod(self.feature_to_cnn_shape))
+            z_dim, np.prod(self.cnn_shape))
         self.lin_hidden_to_hidden = nn.ConvTranspose2d(
             emission_channels[0], emission_channels[1], kernel_size, stride, padding, bias=True)
-        self.lin_hidden_to_input_loc = nn.ConvTranspose2d(
+        self.lin_hidden_to_conv_loc = nn.ConvTranspose2d(
             emission_channels[1], input_channels, kernel_size, stride, padding, bias=True)
-        self.lin_hidden_to_input_scale = nn.ConvTranspose2d(
+        self.lin_hidden_to_conv_scale = nn.ConvTranspose2d(
             emission_channels[1], input_channels, kernel_size, stride, padding, bias=True)
 
         # Non-linearities
@@ -55,10 +55,10 @@ class Emitter(nn.Module):
         """
         
         batch_size = z_t.shape[0]
-        h1 = self.relu(self.lin_z_to_hidden(z_t)).view(batch_size, *self.feature_to_cnn_shape)
+        h1 = self.relu(self.lin_z_to_hidden(z_t)).view(batch_size, *self.cnn_shape)
         h2 = self.relu(self.lin_hidden_to_hidden(h1))
-        loc = self.tanh(self.lin_hidden_to_input_loc(h2))
-        scale = self.softplus(self.lin_hidden_to_input_scale(h2)).clamp(min=1e-4)
+        loc = self.tanh(self.lin_hidden_to_conv_loc(h2))
+        scale = self.softplus(self.lin_hidden_to_conv_scale(h2)).clamp(min=1e-4)
         return loc, scale
 
 
@@ -156,18 +156,17 @@ class Flattener(nn.Module):
     def __init__(self, width, height, input_channels, rnn_dim, flatten_channels, kernel_size):
         super().__init__()
         padding = int((kernel_size - 1) / 2)
-        n_layers = 2
         stride = 2
-        self.feature_width = width // 2 ** len(flatten_channels)
-        self.feature_height = height // 2 ** len(flatten_channels)
-        self.feature_dim = flatten_channels[-1] * self.feature_width * self.feature_height
+        self.input_width = width // 2 ** len(flatten_channels)
+        self.input_height = height // 2 ** len(flatten_channels)
+        self.input_dim = flatten_channels[-1] * self.input_width * self.input_height
 
         # Two-layered convolution with a fully connected layer at last 
-        self.conv_y_to_hidden = nn.Conv2d(input_channels, flatten_channels[0], 
+        self.cnn_to_hidden = nn.Conv2d(input_channels, flatten_channels[0], 
                                           kernel_size, stride, padding, bias=True)
-        self.conv_hidden_to_hidden = nn.Conv2d(flatten_channels[0], flatten_channels[1], 
+        self.cnn_hidden_to_hidden = nn.Conv2d(flatten_channels[0], flatten_channels[1], 
                                                kernel_size, stride, padding, bias=True)
-        self.lin_hidden_to_rnn = nn.Linear(self.feature_dim, rnn_dim)
+        self.lin_hidden_to_rnn = nn.Linear(self.input_dim, rnn_dim)
 
         # Non-linearities 
         self.relu = nn.ReLU()
@@ -179,8 +178,8 @@ class Flattener(nn.Module):
         Return the flattened input to RNN 
         """
         batch_size = z_t.shape[0]
-        h1 = self.relu(self.conv_y_to_hidden(z_t))
-        h2 = self.relu(self.conv_hidden_to_hidden(h1)).view(batch_size, -1)
+        h1 = self.relu(self.cnn_to_hidden(z_t))
+        h2 = self.relu(self.cnn_hidden_to_hidden(h1)).view(batch_size, -1)
         rnn_input = self.tanh(self.lin_hidden_to_rnn(h2))
 
         return rnn_input
